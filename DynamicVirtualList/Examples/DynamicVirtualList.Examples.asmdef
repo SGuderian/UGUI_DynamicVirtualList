@@ -1,4 +1,0 @@
-{
-    "name": "DynamicVirtualList.Examples",
-    "references": ["RunTime", "UnityEngine.UI"]
-}
