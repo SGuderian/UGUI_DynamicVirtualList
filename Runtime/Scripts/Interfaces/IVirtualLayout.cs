@@ -39,6 +39,7 @@ namespace VirtualList
     internal interface IBufferedVirtualLayout
     {
         void FillVisible(Rect visibleRect, VisibleItemWriter writer);
+        int GetFirstIndexAtOffset(float offset);
     }
 
     // 网格在批次结束时统一更新受影响的行高。

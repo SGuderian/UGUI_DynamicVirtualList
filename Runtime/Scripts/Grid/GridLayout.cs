@@ -67,6 +67,22 @@ namespace VirtualList
 
         void IBufferedVirtualLayout.FillVisible(Rect visibleRect, VisibleItemWriter writer) => FillVisible(visibleRect, writer);
 
+        int IBufferedVirtualLayout.GetFirstIndexAtOffset(float offset)
+        {
+            if (_cellWidth <= 0f) return -1;
+            double stride = (double)_cellWidth + _options.Spacing;
+            int column = GetFirstColumn(0f, stride);
+            if (column >= _cols || _options.Padding.Left + column * stride >= _viewport.x) return -1;
+            int row = _rowPrefix.FirstIndexAtOrAfter(offset - _options.Padding.Top);
+            if (row < 0) return -1;
+            int first = row * _cols;
+            return column < Count - first ? first + column : -1;
+        }
+
+        private int GetFirstColumn(float minX, double stride)
+            => (int)System.Math.Min(_cols, System.Math.Max(0d,
+                System.Math.Floor(((double)minX - _options.Padding.Left - _cellWidth) / stride) + 1d));
+
         private void FillVisible(Rect visibleRect, VisibleItemWriter writer)
         {
             int n = Count;
@@ -74,8 +90,7 @@ namespace VirtualList
 
             var p = _options.Padding;
             double stride = (double)_cellWidth + _options.Spacing;
-            int firstColumn = (int)System.Math.Min(_cols, System.Math.Max(0d,
-                System.Math.Floor(((double)visibleRect.xMin - p.Left - _cellWidth) / stride) + 1d));
+            int firstColumn = GetFirstColumn(visibleRect.xMin, stride);
             int endColumn = (int)System.Math.Min(_cols, System.Math.Max(0d,
                 System.Math.Ceiling(((double)visibleRect.xMax - p.Left) / stride)));
             if (firstColumn >= endColumn) return;

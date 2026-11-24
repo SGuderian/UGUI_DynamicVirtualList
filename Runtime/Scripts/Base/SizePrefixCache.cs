@@ -79,6 +79,14 @@ namespace VirtualList
             return Math.Min(index, _count - 1);
         }
 
+        internal int FirstIndexAtOrAfter(float offset)
+        {
+            int index = IndexAtOffset(offset);
+            if (index < 0) return -1;
+            if (PrefixLength(index) + _lengths[index] <= offset) index++;
+            return index < _count ? index : -1;
+        }
+
         /// <summary>含条目之间的间距，省略末尾间距和内边距。</summary>
         public float TotalLength => _count == 0 ? 0f : (float)(PrefixLength(_count) - _spacing);
 

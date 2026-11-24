@@ -21,17 +21,28 @@
 
 | 场景 | 验证内容 |
 | --- | --- |
-| `VerticalList.unity` | 1,200 条数据、随机行高 44–280、池化复用、连续跳转压测 |
+| `VerticalList.unity` | 1,200 条数据、`ContentSizeFitter` 动态行高 44–280、两种模板、坐标反查和连续跳转压测 |
 | `HorizontalList.unity` | 120 条数据、动态宽度、横向滚动条 |
 | `Grid.unity` | 600 条数据、四列、按行聚合高度 |
 | `Tree.unity` | 190 个业务节点、点击展开折叠、在业务中重定位视口锚点 |
+| `ListApiDemo.unity` | 跳转、刷新、动态尺寸、多模板和回调的交互示例 |
 
-四个场景都有添加数据、反转显示顺序、跳到末尾和切换循环滚动的按钮。示例预制体在 `Examples/Prefabs`，回调和业务集合在 `Examples/Scripts/DemoDataBootstrap.cs`。
+四个布局场景都有添加数据、反转显示顺序、跳到末尾和切换循环滚动的按钮。示例预制体在 `Examples/Prefabs`，回调和业务集合在 `Examples/Scripts/DemoDataBootstrap.cs`。
 单击普通列表项可选择或取消选择，单击树分支可展开或折叠。场景顶部会显示刷新和滚动状态。
 
 场景底部可以输入从 0 开始的 `Index` 和 `Slot`，测试顶部、底部和指定视口位次跳转。也可以输入 `Offset` 测试坐标跳转，纵向取 Y，横向取 X，单位为 UGUI 布局单位。`Precise` 和 `Smooth` 分别控制精确修正和平滑过渡。
 
 在 VerticalList 保持循环滚动关闭，点击 `Run stress` 执行 96 轮固定种子测试。测试覆盖顶部、底部、视口位次和坐标跳转，也会让新请求覆盖上一条跳转。面板显示通过数、失败数和首条失败的位置误差。再次点击可停止测试。
+
+VerticalList 由业务选择普通或详情预制体。模板 0 的 Fitter 位于内部内容，列表用测量回调设置条目根节点的高度。模板 1 的 Fitter 直接控制条目根节点，用于复现同步问题。点击 **Test root fitter** 会定位到详情行并让其变高，此时列表仍按原高度摆放下一行，面板会显示重叠量。再次点击会通过 `RefreshItem` 恢复原高度。
+
+点击 **Read viewport** 查看当前内容坐标、首个可见索引和视口宽高。修改底部 `Offset` 后点击 **Index at offset** 可以反查索引。
+
+### 接口演示
+
+打开 `ListApiDemo.unity` 进入 Play Mode。默认目标索引为 `70`，可以先点 **Keep viewport**，再点 **Jump & refresh**，对比两种离屏刷新。点击列表项或 **First visible** 会把在屏索引填入输入框，方便比较 **Refresh item** 和只触发重新测量的 **Change height**。
+
+跳转区可调节精确定位、时长和缓动，并测试顶部、底部、视口位次和坐标。数据区可切换条目模板、修改默认高度、请求新增数据、切换循环与惯性。左侧显示当前位置、绑定与测量次数，以及最近的点击、滚动、刷新和跳转完成回调。业务数据和接口调用都在 `Examples/Scripts/ListApiDemo.cs`。
 
 ## 接入业务
 
@@ -105,7 +116,7 @@ public sealed class InventoryList : MonoBehaviour
 | `RegisterItemClickCallback((holder, index) => ...)` | 左键或触摸点击一个已绑定的在屏条目。单元格根或子节点需有可射线命中的 Graphic。自定义 `OnPointerClick` 需调用基类才能转发点击 |
 | `RegisterRefreshRequestedCallback(() => ...)` | 业务或 UI 调用 `RequestRefresh()`。业务可异步加载数据，随后调用 `RefreshItems`。省略回调时直接刷新当前列表 |
 | `RegisterListRefreshedCallback(count => ...)` | 全量 `RefreshItems` 完成重排和在屏绑定，参数是刷新后的条目数 |
-| `RegisterItemRefreshedCallback(index => ...)` | `RefreshItem(index)` 应用完成 |
+| `RegisterItemRefreshedCallback(index => ...)` | `RefreshItem` 应用完成。批量刷新中每个索引回调一次 |
 | `RegisterScrollStartedCallback(position => ...)` | 开始拖拽、开始平滑滚动或应用一次即时滚动 |
 | `RegisterScrollChangedCallback(position => ...)` | 滚动位置变化并完成可见项更新 |
 | `RegisterScrollEndedCallback(position => ...)` | 该次滚动停止，包括惯性、回弹和吸附结束后的停止位置 |
@@ -115,6 +126,7 @@ public sealed class InventoryList : MonoBehaviour
 - `RefreshItems()` 使用当前条目数刷新，保留当前布局偏移。
 - `RefreshItems(count, anchorIndex, offsetWithinAnchor)` 用于更新数量、顺序、模板或树深度。业务可提供新的锚点索引和偏移。
 - `RefreshItem(index)` 更新指定条目的 UI。条目在屏时只重新绑定它的实例，离屏时等再次入屏才绑定。固定尺寸由预估尺寸回调更新，动态尺寸重新排队测量。模板或树深度改变时使用全量刷新。
+- `RefreshItem(index, keepViewport)` 在目标可见时只刷新目标。目标离屏时，传 `true` 保留当前视口并批量刷新当前一屏，目标下次入屏时重测。传 `false` 精确定位到目标并批量刷新目标所在的一屏。每屏按实际可见区域计算。
 - `MarkItemDirty(index)` 保留已绑定的 UI，只安排尺寸重测。
 
 初始化和整表刷新会先同步视口布局，再设置条目矩形并绑定。默认每次刷新最多同步测量并重排四轮。剩余条目和滚动中新入屏的条目进入延迟队列。`Measure Delay Frames` 大于 `1` 或关闭 `Measure After Canvas Refresh` 时，刷新也走延迟测量。
@@ -127,6 +139,7 @@ public sealed class InventoryList : MonoBehaviour
 
 - `ScrollToIndex(index)` 将指定条目的前沿对齐到视口起点，索引从 `0` 开始。循环列表选择最近一轮。若实测尺寸在动画期间改变了目标位置，控制器会更新终点。
 - `ScrollToPosition(position)` 跳到内容坐标，纵向取 `y`，横向取 `x`。有限列表将目标约束在滚动范围内，循环列表允许以当前轮起点为基准传入跨轮偏移。
+- `CurContentPos` 返回当前逻辑内容偏移，与 `ScrollPosition` 一致。`ViewportSize` 返回视口本地宽高。把当前偏移或任意内容坐标传给 `TryGetIndexAtContentPosition`，可查询该坐标作为视口起点时的首个可见索引。落在间距时查找下一项。查询使用当前布局缓存，离屏条目的尺寸可能仍是估算值。
 - 两个跳转接口默认使用 Inspector 的平滑滚动设置。可传入 `smooth` 覆盖本次调用。`SetScroll(origin)` 和 `AddScroll(delta)` 仍可用于即时设置偏移。
 - 传入 `precise: true` 时，先用估算或缓存尺寸即时定位，再随在屏测量修正。设置 `smooth: true` 会平滑过渡到修正后的位置。坐标跳转以指定的布局坐标为目标，有限列表会随滚动范围变化重新约束该坐标。未入屏的条目仍使用估算尺寸。
 - 索引跳转可传 `viewportIndex` 指定目标条目在视口内的位次，`0` 为第一项。空间不足、列表边界或网格整行布局限制时，优先保证目标可见。也可用 `ScrollIndexAlignment.Top` 或 `Bottom` 对齐到首尾边缘，横向对应左、右。
@@ -152,6 +165,11 @@ adapter.ScrollToIndex(20, ScrollIndexAlignment.Bottom, 0.4f, EaseCurve.EaseOutQu
     position => Debug.Log(position), precise: true);
 adapter.ScrollToPosition(new Vector2(0f, 600f), 0.5f, EaseCurve.Linear,
     position => Debug.Log(position));
+
+Vector2 contentPosition = adapter.CurContentPos;
+Vector2 viewportSize = adapter.ViewportSize;
+if (adapter.TryGetIndexAtContentPosition(contentPosition, out int index))
+    Debug.Log($"First visible index {index}, viewport {viewportSize}");
 ```
 
 从旧版迁移时，按布局将场景或 Prefab 上的 `VirtualScrollView` 换成对应适配器，并重新绑定视口、容器、滚动条和模板。原 `RegisterCallbacks(count, callbacks)` 拆成直接注册委托和 `Init(count)` 两步。业务排序或树展开后继续用 `RefreshItems` 通知视图。

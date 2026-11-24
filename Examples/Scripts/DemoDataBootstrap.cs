@@ -13,6 +13,7 @@ namespace VirtualList.Examples
         [SerializeField] private Text _status;
         [SerializeField, Min(0)] private int _itemCount = 100;
         [SerializeField] private bool _randomizeVerticalHeights;
+        [SerializeField] private bool _useFittedTemplates;
         [SerializeField] private int _heightSeed = 421;
         [SerializeField, Range(0, 4)] private int _treeDepth = 2;
         [SerializeField, Range(1, 4)] private int _childrenPerNode = 3;
@@ -29,6 +30,7 @@ namespace VirtualList.Examples
         internal bool IsScrolling { get; private set; }
         internal float RowHeight(int index) => _items[index].LayoutHeight;
         internal float MaximumRowHeight(int index) => Mathf.Max(RowHeight(index), _items[index].EstimatedHeight);
+        internal int TemplateIdAt(int index) => _useFittedTemplates && _items[index].LayoutHeight >= 158f ? 1 : 0;
 
         internal float MinimumContentLength()
         {
@@ -55,6 +57,7 @@ namespace VirtualList.Examples
             adapter.RegisterCallbacks(BindItem,
                 getEstimatedSize: EstimateItem, measureItem: MeasureItem,
                 getDepth: IsTree ? GetDepth : (Func<int, int>)null);
+            if (_useFittedTemplates) adapter.RegisterItemTemplateCallback(TemplateIdAt);
             adapter.RegisterItemClickCallback(OnItemClicked);
             adapter.RegisterRefreshRequestedCallback(AppendAndRefresh);
             adapter.RegisterListRefreshedCallback(OnListRefreshed);
@@ -81,7 +84,11 @@ namespace VirtualList.Examples
                 return;
             }
             var item = _items[index];
-            ((DemoCell)holder).Show(item == _selectedItem ? item.Title + "  [selected]" : item.Title, item.Body, item.LayoutHeight);
+            string title = item == _selectedItem ? item.Title + "  [selected]" : item.Title;
+            string body = item.Body;
+            if (_useFittedTemplates)
+                body += holder.TemplateId == 1 ? "  /  template 1: root fitter" : "  /  template 0: child fitter";
+            ((DemoCell)holder).Show(title, body, item.LayoutHeight);
         }
 
         private Vector2 EstimateItem(int index) => IsTree

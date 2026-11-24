@@ -15,6 +15,8 @@ namespace VirtualList
         private Action<Vector2> _onScrollEnded;
 
         private readonly HashSet<int> _pendingItemRefreshes = new HashSet<int>();
+        private readonly Queue<(int Index, bool KeepViewport)> _pendingViewportRefreshes =
+            new Queue<(int, bool)>();
         private readonly HashSet<int> _refreshingItems = new HashSet<int>();
         private bool _processingItemRefreshes;
         private bool _listRefreshPending;
@@ -29,6 +31,12 @@ namespace VirtualList
 
         /// <inheritdoc/>
         public Vector2 ScrollPosition => _scrollOrigin;
+
+        /// <inheritdoc/>
+        public Vector2 CurContentPos => ScrollPosition;
+
+        /// <inheritdoc/>
+        public Vector2 ViewportSize => (_viewport != null ? _viewport : (RectTransform)transform).rect.size;
 
         public void RegisterItemClickCallback(Action<VirtualItemCell, int> callback) => _onItemClicked = callback;
         public void RegisterRefreshRequestedCallback(Action callback) => _onRefreshRequested = callback;
@@ -80,15 +88,29 @@ namespace VirtualList
         /// <inheritdoc/>
         public void RefreshItem(int index)
         {
-            if (!IsInitialized) throw new InvalidOperationException("Initialize the adapter before refreshing items.");
-            if (index < 0 || index >= _itemCount) throw new ArgumentOutOfRangeException(nameof(index));
+            ValidateItemRefresh(index);
             _pendingItemRefreshes.Add(index);
             ProcessItemRefreshes();
         }
 
+        /// <inheritdoc/>
+        public void RefreshItem(int index, bool keepViewport)
+        {
+            ValidateItemRefresh(index);
+            _pendingViewportRefreshes.Enqueue((index, keepViewport));
+            ProcessItemRefreshes();
+        }
+
+        private void ValidateItemRefresh(int index)
+        {
+            if (!IsInitialized) throw new InvalidOperationException("Initialize the adapter before refreshing items.");
+            if (index < 0 || index >= _itemCount) throw new ArgumentOutOfRangeException(nameof(index));
+        }
+
         private void ProcessItemRefreshes()
         {
-            if (_pendingItemRefreshes.Count == 0 || _processingItemRefreshes || _updatingView
+            if ((_pendingItemRefreshes.Count == 0 && _pendingViewportRefreshes.Count == 0)
+                || _processingItemRefreshes || _updatingView
                 || _dirtyLayout || !IsInitialized || !isActiveAndEnabled) return;
 
             // 绑定和回收回调可能再次请求刷新，新请求由下一批处理。
@@ -101,6 +123,8 @@ namespace VirtualList
                 _updatingView = true;
                 try
                 {
+                    if (_pendingViewportRefreshes.Count > 0)
+                        ExpandViewportRefresh(_pendingViewportRefreshes.Dequeue());
                     ApplyItemRefreshes();
                 }
                 finally
@@ -108,7 +132,12 @@ namespace VirtualList
                     _updatingView = false;
                 }
 
-                if (!_dirtyLayout && !_pendingRelayout) PublishScroll(_preciseJump);
+                if (!_dirtyLayout && !_pendingRelayout)
+                {
+                    bool reportMovement = _preciseJump || _notifyScrollOnLayout;
+                    _notifyScrollOnLayout = false;
+                    PublishScroll(reportMovement);
+                }
                 foreach (int index in _refreshingItems)
                 {
                     if (_dirtyLayout || !IsInitialized) break;
@@ -119,6 +148,23 @@ namespace VirtualList
             {
                 _processingItemRefreshes = false;
             }
+        }
+
+        private void ExpandViewportRefresh((int Index, bool KeepViewport) request)
+        {
+            _refreshingItems.Add(request.Index);
+            for (int i = 0; i < _visibleBuffer.Count; i++)
+                if (_visibleBuffer[i].Index == request.Index) return;
+
+            if (!request.KeepViewport)
+            {
+                // 先确定目标视口，随后由本批刷新统一绑定，避免新入屏的条目绑定两次。
+                ScrollToIndex(request.Index, smooth: false, precise: true);
+                CollectVisibleItems();
+            }
+
+            for (int i = 0; i < _visibleBuffer.Count; i++)
+                _refreshingItems.Add(_visibleBuffer[i].Index);
         }
 
         private void ApplyItemRefreshes()
@@ -237,7 +283,13 @@ namespace VirtualList
             _onScrollChanged = null;
             _onScrollEnded = null;
             _listRefreshPending = false;
+            ClearPendingItemRefreshes();
+        }
+
+        private void ClearPendingItemRefreshes()
+        {
             _pendingItemRefreshes.Clear();
+            _pendingViewportRefreshes.Clear();
         }
     }
 }

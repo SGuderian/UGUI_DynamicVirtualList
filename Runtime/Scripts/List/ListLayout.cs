@@ -63,6 +63,8 @@ namespace VirtualList
 
         void IBufferedVirtualLayout.FillVisible(Rect visibleRect, VisibleItemWriter writer) => FillVisible(visibleRect, writer);
 
+        int IBufferedVirtualLayout.GetFirstIndexAtOffset(float offset) => _prefix.FirstIndexAtOrAfter(offset - LeadingPadding);
+
         private void FillVisible(Rect visibleRect, VisibleItemWriter writer)
         {
             int n = Count;

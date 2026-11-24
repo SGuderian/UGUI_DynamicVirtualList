@@ -55,6 +55,7 @@ namespace VirtualList
         private readonly Dictionary<(long Cycle, int Index), ActiveCell> _active = new Dictionary<(long, int), ActiveCell>();
         private readonly VisibleItemBuffer _visibleBuffer = new VisibleItemBuffer();
         private readonly List<VirtualItemData> _customLayoutBuffer = new List<VirtualItemData>();
+        private List<VirtualItemData> _indexLookupBuffer;
         private readonly List<(long Cycle, int Index)> _visibleKeys = new List<(long, int)>();
         private readonly HashSet<(long Cycle, int Index)> _seenThisFrame = new HashSet<(long, int)>();
         private readonly HashSet<int> _invalidTemplates = new HashSet<int>();
@@ -299,7 +300,7 @@ namespace VirtualList
             _anchorIndex = anchorIndex;
             _anchorOffset = FiniteOrZero(offsetWithinAnchor);
             _listRefreshPending = true;
-            _pendingItemRefreshes.Clear();
+            ClearPendingItemRefreshes();
             Rebind();
         }
 
@@ -328,6 +329,46 @@ namespace VirtualList
             index = first.Index;
             offsetWithinItem = Axis(_scrollOrigin - first.Rect.position);
             return true;
+        }
+
+        /// <inheritdoc/>
+        public bool TryGetIndexAtContentPosition(Vector2 position, out int index)
+        {
+            index = -1;
+            if (!IsInitialized || _dirtyLayout || _layout.Count == 0
+                || _viewportSize.x <= 0f || _viewportSize.y <= 0f) return false;
+
+            float offset = Axis(position);
+            if (float.IsNaN(offset) || float.IsInfinity(offset)) return false;
+            if (_loopLength > 0f) offset = WrapOffset(offset, _loopLength);
+
+            index = GetFirstIndexInViewport(offset);
+            if (index < 0 && _loopLength > 0f)
+                index = GetFirstIndexInViewport(offset - _loopLength);
+            return index >= 0;
+        }
+
+        private int GetFirstIndexInViewport(float offset)
+        {
+            if (_layout is IBufferedVirtualLayout buffered)
+            {
+                int index = buffered.GetFirstIndexAtOffset(offset);
+                return index >= 0 && _layout.GetScrollOffsetForIndex(index) < offset + Axis(_viewportSize)
+                    ? index : -1;
+            }
+
+            var buffer = _indexLookupBuffer ?? (_indexLookupBuffer = new List<VirtualItemData>());
+            _layout.FillVisible(new Rect(AlongAxis(offset), _viewportSize), buffer);
+            int first = buffer.Count > 0 ? buffer[0].Index : -1;
+            buffer.Clear();
+            return first;
+        }
+
+        private static float WrapOffset(float offset, float length)
+        {
+            float wrapped = offset % length;
+            if (wrapped < 0f) wrapped += length;
+            return wrapped < length ? wrapped : 0f;
         }
 
         private static void ValidateItemCount(int itemCount)
@@ -759,10 +800,7 @@ namespace VirtualList
             }
 
             _pendingRelayout = false;
-            ConstrainScroll();
-
-            Rect viewportRect = new Rect(_scrollOrigin.x, _scrollOrigin.y, _viewportSize.x, _viewportSize.y);
-            FillVisible(viewportRect);
+            CollectVisibleItems();
 
             bool changed = UpdateVisibleKeys();
             if (changed)
@@ -786,6 +824,12 @@ namespace VirtualList
             _siblingsOrdered = _orderVisibleNodes;
 
             RefreshScrollbars(_layout.ContentSize);
+        }
+
+        private void CollectVisibleItems()
+        {
+            ConstrainScroll();
+            FillVisible(new Rect(_scrollOrigin, _viewportSize));
         }
 
         private bool UpdatePlacement(out bool changed)

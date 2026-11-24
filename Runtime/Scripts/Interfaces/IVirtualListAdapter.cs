@@ -16,6 +16,18 @@ namespace VirtualList
 
         /// <summary>内容左上角到视口左上角的滚动偏移，单位为 UGUI 布局单位。循环模式下为当前轮内的偏移。</summary>
         Vector2 ScrollPosition { get; }
+
+        /// <summary>当前内容滚动偏移，与 <see cref="ScrollPosition"/> 使用同一套逻辑坐标。</summary>
+        Vector2 CurContentPos { get; }
+
+        /// <summary>视口 RectTransform 的本地宽高，单位为 UGUI 布局单位。</summary>
+        Vector2 ViewportSize { get; }
+
+        /// <summary>把内容坐标作为视口起点，查询第一个与该视口相交的显示索引。</summary>
+        /// <remarks>纵向取 y，横向取 x。落在间距时查找后一项，网格按行返回首个可见条目。
+        /// 循环列表按轮长折算。查询使用现有布局缓存，离屏条目可使用估算尺寸。</remarks>
+        bool TryGetIndexAtContentPosition(Vector2 position, out int index);
+
         ScrollSettings CurrentSettings { get; }
 
         /// <summary>缺少有效条目估算时使用的尺寸。两轴均须为有限正数，修改后在下一次整表布局时生效。</summary>
@@ -47,7 +59,7 @@ namespace VirtualList
         /// <summary>整表刷新应用后收到新的条目总数。传 null 注销。</summary>
         void RegisterListRefreshedCallback(Action<int> callback);
 
-        /// <summary>单条刷新应用后收到该条目的显示索引。传 null 注销。</summary>
+        /// <summary>收到已处理的刷新索引。一次批量刷新中每个索引通知一次。传 null 注销。</summary>
         void RegisterItemRefreshedCallback(Action<int> callback);
 
         /// <summary>收到滚动开始时的偏移。传 null 注销。</summary>
@@ -83,6 +95,12 @@ namespace VirtualList
         /// <summary>重新绑定指定条目的在屏实例并更新尺寸。离屏条目下次入屏时绑定。</summary>
         /// <remarks>模板或树深度变化时需重建整表。</remarks>
         void RefreshItem(int index);
+
+        /// <summary>目标在屏时只刷新该索引。目标离屏时，将目标和一屏条目加入同一次刷新。</summary>
+        /// <param name="index">目标显示索引，从 0 开始。</param>
+        /// <param name="keepViewport">为 true 时保留当前视口并刷新当前一屏，目标在入屏时绑定。为 false 时精确定位到目标并刷新目标所在的一屏。</param>
+        /// <remarks>批量刷新按显示索引去重。模板、顺序或树深度变化时仍用整表刷新。</remarks>
+        void RefreshItem(int index, bool keepViewport);
 
         /// <summary>安排在屏条目重新测量尺寸，保留当前绑定的内容。</summary>
         void MarkItemDirty(int visibleIndex);
