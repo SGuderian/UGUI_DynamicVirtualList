@@ -5,6 +5,8 @@ namespace VirtualList
     /// <summary>用树状数组维护主轴累计长度和条目间距。</summary>
     public sealed class SizePrefixCache
     {
+        internal const float DefaultLength = 32f;
+
         private double[] _tree;
         private float[] _lengths;
         private int _count;
@@ -82,7 +84,8 @@ namespace VirtualList
 
         internal static bool IsValidLength(float value) => value > 0f && !float.IsInfinity(value);
 
-        internal static float Estimate(float value) => IsValidLength(value) ? value : 32f;
+        internal static float Estimate(float value, float fallback = DefaultLength)
+            => IsValidLength(value) ? value : IsValidLength(fallback) ? fallback : DefaultLength;
 
         internal static float NonNegative(float value) => IsValidLength(value) ? value : 0f;
 

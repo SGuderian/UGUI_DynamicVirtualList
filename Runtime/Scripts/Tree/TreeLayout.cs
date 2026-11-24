@@ -37,7 +37,8 @@ namespace VirtualList
             for (int i = 0; i < count; i++)
             {
                 _depthOf[i] = Mathf.Max(0, depth?.Invoke(i) ?? 0);
-                _sizes[i] = new Vector2(GetWidth(i), SizePrefixCache.Estimate((estimateSize?.Invoke(i) ?? Vector2.zero).y));
+                float height = SizePrefixCache.Estimate((estimateSize?.Invoke(i) ?? Vector2.zero).y, options.DefaultItemSize.y);
+                _sizes[i] = new Vector2(GetWidth(i), height);
                 _templateIds[i] = templateId?.Invoke(i) ?? 0;
             }
 

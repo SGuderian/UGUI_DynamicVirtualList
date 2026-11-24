@@ -1,3 +1,5 @@
+using UnityEngine;
+
 namespace VirtualList
 {
     public enum VirtualLayoutMode
@@ -20,6 +22,9 @@ namespace VirtualList
 
         public RectOffset Padding;
 
+        /// <summary>条目没有有效估算时使用的尺寸。内置布局只使用主轴分量。</summary>
+        public Vector2 DefaultItemSize;
+
         /// <summary>Grid 模式列数。</summary>
         public int ColumnCount;
 
@@ -31,6 +36,7 @@ namespace VirtualList
             Mode = VirtualLayoutMode.VerticalList,
             Spacing = 4f,
             Padding = new RectOffset(0, 0, 0, 0),
+            DefaultItemSize = Vector2.one * SizePrefixCache.DefaultLength,
             ColumnCount = 2,
             IndentPerDepth = 24f,
         };

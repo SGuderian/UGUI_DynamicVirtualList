@@ -7,9 +7,13 @@ namespace VirtualList.Examples
 {
     public sealed class DemoDataBootstrap : MonoBehaviour
     {
+        internal const int MinimumRowHeight = 44;
+
         [SerializeField] private VirtualListAdapterBase _view;
         [SerializeField] private Text _status;
         [SerializeField, Min(0)] private int _itemCount = 100;
+        [SerializeField] private bool _randomizeVerticalHeights;
+        [SerializeField] private int _heightSeed = 421;
         [SerializeField, Range(0, 4)] private int _treeDepth = 2;
         [SerializeField, Range(1, 4)] private int _childrenPerNode = 3;
 
@@ -19,7 +23,20 @@ namespace VirtualList.Examples
         private DemoItem _selectedItem;
         private int _scrollStatusBucket;
         private int _nextId;
+        private System.Random _heightRandom;
         private bool _initialized;
+
+        internal bool IsScrolling { get; private set; }
+        internal float RowHeight(int index) => _items[index].LayoutHeight;
+        internal float MaximumRowHeight(int index) => Mathf.Max(RowHeight(index), _items[index].EstimatedHeight);
+
+        internal float MinimumContentLength()
+        {
+            float length = 0f;
+            foreach (var item in _items)
+                length += Mathf.Min(item.EstimatedHeight, item.LayoutHeight);
+            return length;
+        }
 
         private bool IsTree => _view.LayoutMode == VirtualLayoutMode.Tree;
         private int Count => IsTree ? _visibleNodes.Count : _items.Count;
@@ -29,6 +46,7 @@ namespace VirtualList.Examples
             if (_view == null) return;
             if (!_initialized)
             {
+                _heightRandom = new System.Random(_heightSeed);
                 Append(Mathf.Max(0, _itemCount));
                 _initialized = true;
             }
@@ -51,6 +69,7 @@ namespace VirtualList.Examples
         private void OnDisable()
         {
             if (_view != null) _view.ClearCallbacks();
+            IsScrolling = false;
         }
 
         private void BindItem(VirtualItemCell holder, int index)
@@ -62,7 +81,7 @@ namespace VirtualList.Examples
                 return;
             }
             var item = _items[index];
-            ((DemoCell)holder).Show(item == _selectedItem ? item.Title + "  [selected]" : item.Title, item.Body);
+            ((DemoCell)holder).Show(item == _selectedItem ? item.Title + "  [selected]" : item.Title, item.Body, item.LayoutHeight);
         }
 
         private Vector2 EstimateItem(int index) => IsTree
@@ -101,6 +120,7 @@ namespace VirtualList.Examples
 
         private void OnScrollStarted(Vector2 position)
         {
+            IsScrolling = true;
             _scrollStatusBucket = Mathf.FloorToInt(ScrollOffset(position) / 32f);
             ShowStatus("Scrolling started.");
         }
@@ -114,7 +134,11 @@ namespace VirtualList.Examples
             ShowStatus($"Scrolling at {offset:F0}.");
         }
 
-        private void OnScrollEnded(Vector2 position) => ShowStatus($"Scrolling ended at {ScrollOffset(position):F0}.");
+        private void OnScrollEnded(Vector2 position)
+        {
+            IsScrolling = false;
+            ShowStatus($"Scrolling ended at {ScrollOffset(position):F0}.");
+        }
 
         private float ScrollOffset(Vector2 position)
             => _view.LayoutMode == VirtualLayoutMode.HorizontalList ? position.x : position.y;
@@ -180,6 +204,16 @@ namespace VirtualList.Examples
             for (int i = 0; i < count; i++)
             {
                 int id = ++_nextId;
+                if (_randomizeVerticalHeights && _view.LayoutMode == VirtualLayoutMode.VerticalList)
+                {
+                    int band = _heightRandom.Next(10);
+                    int height = band < 4 ? _heightRandom.Next(MinimumRowHeight, 69) :
+                        band < 7 ? _heightRandom.Next(82, 145) : _heightRandom.Next(158, 281);
+                    float estimate = band < 4 ? 58f : band < 7 ? 108f : 182f;
+                    _items.Add(new DemoItem($"Item {id}", $"Height {height}  /  estimate {estimate:F0}", estimate, height));
+                    continue;
+                }
+
                 bool multiline = id % 3 == 0;
                 string body = multiline
                     ? "This row has a longer description. Its preferred height is measured after layout and changes with the viewport width."

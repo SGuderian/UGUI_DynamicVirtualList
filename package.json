@@ -2,6 +2,7 @@
     "name": "com.dynamivituallist.runtime",
     "displayName": "Dynamic Virtual List",
     "version": "0.0.1",
+    "license": "MIT",
     "unity": "2022.3",
     "description": "一个基于坐标偏移实现的UGUI循环列表",
     "keywords": ["DynamicVitualList"],

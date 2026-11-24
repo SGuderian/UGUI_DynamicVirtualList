@@ -3,8 +3,7 @@
     "rootNamespace": "",
     "references": [
         "GUID:9d87cf991604f444093bb1afaee78464",
-        "UnityEngine.UI",
-        "DynamicVirtualList.Examples"
+        "UnityEngine.UI"
     ],
     "includePlatforms": [
         "Editor"

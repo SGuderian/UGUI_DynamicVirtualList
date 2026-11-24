@@ -47,7 +47,7 @@ namespace VirtualList
 
             for (int i = 0; i < n; i++)
             {
-                float height = SizePrefixCache.Estimate((estimateSize?.Invoke(i) ?? Vector2.zero).y);
+                float height = SizePrefixCache.Estimate((estimateSize?.Invoke(i) ?? Vector2.zero).y, options.DefaultItemSize.y);
                 _sizes[i] = new Vector2(_cellWidth, height);
                 _templateIds[i] = templateId?.Invoke(i) ?? 0;
                 int row = i / _cols;

@@ -21,7 +21,7 @@
 
 | 场景 | 验证内容 |
 | --- | --- |
-| `VerticalList.unity` | 500 条数据、动态高度、池化复用 |
+| `VerticalList.unity` | 1,200 条数据、随机行高 44–280、池化复用、连续跳转压测 |
 | `HorizontalList.unity` | 120 条数据、动态宽度、横向滚动条 |
 | `Grid.unity` | 600 条数据、四列、按行聚合高度 |
 | `Tree.unity` | 190 个业务节点、点击展开折叠、在业务中重定位视口锚点 |
@@ -29,12 +29,17 @@
 四个场景都有添加数据、反转显示顺序、跳到末尾和切换循环滚动的按钮。示例预制体在 `Examples/Prefabs`，回调和业务集合在 `Examples/Scripts/DemoDataBootstrap.cs`。
 单击普通列表项可选择或取消选择，单击树分支可展开或折叠。场景顶部会显示刷新和滚动状态。
 
+场景底部可以输入从 0 开始的 `Index` 和 `Slot`，测试顶部、底部和指定视口位次跳转。也可以输入 `Offset` 测试坐标跳转，纵向取 Y，横向取 X，单位为 UGUI 布局单位。`Precise` 和 `Smooth` 分别控制精确修正和平滑过渡。
+
+在 VerticalList 保持循环滚动关闭，点击 `Run stress` 执行 96 轮固定种子测试。测试覆盖顶部、底部、视口位次和坐标跳转，也会让新请求覆盖上一条跳转。面板显示通过数、失败数和首条失败的位置误差。再次点击可停止测试。
+
 ## 接入业务
 
-1. 打开 **Tools → VirtualList → 生成列表向导**，选择正式列表和布局，绑定业务 Item Prefab。Prefab 资产的根节点需要有 `RectTransform` 和 `VirtualItemCell`，也可使用派生组件 `AutoLayoutCell`。
-2. 在业务组件中引用生成的适配器。统一引用可以声明为 `VirtualListAdapterBase`，业务操作使用 `IVirtualListAdapter`。直接把方法或委托传给 `RegisterCallbacks`，准备好显示序列后再调用 `Init(itemCount)`。
-3. 改变显示内容、索引顺序、模板 ID、深度或数量后，先更新业务集合，再调用 `RefreshItems`。已绑定 UI 单纯发生尺寸变化时调用 `MarkItemDirty(index)`。
-4. 业务退出或释放数据前调用 `ClearCallbacks()`。在回收回调中移除业务为该单元格注册的监听。单元格回收期间仍可读取旧索引。重新启用业务时，再注册并初始化。
+1. 在 Unity Hierarchy 右键选择 **DynamicList → Vertical List / Horizontal List / Grid / Tree**。模板带有视口、裁剪区、内容容器和对应方向的滚动条。
+2. 选中列表根节点，在适配器的 Inspector 设置 `Default Item Size` 和 `Item Templates`。可为不同类型配置多个 Prefab，每个模板使用唯一 ID。条目 Prefab 根节点需要有 `RectTransform` 和 `VirtualItemCell` 或其派生组件。
+3. 在业务组件中引用 `VirtualListAdapterBase`，通过 `RegisterCallbacks` 绑定数据，调用 `RegisterItemTemplateCallback` 按显示索引选择模板 ID。准备好显示序列后调用 `Init(itemCount)`。
+4. 改变显示内容、索引顺序、模板 ID、深度或数量后，先更新业务集合，再调用 `RefreshItems`。已绑定 UI 单纯发生尺寸变化时调用 `MarkItemDirty(index)`。
+5. 业务退出或释放数据前调用 `ClearCallbacks()`。在回收回调中移除业务为该单元格注册的监听。单元格回收期间仍可读取旧索引。重新启用业务时，再注册并初始化。
 
 ```csharp
 using System.Collections.Generic;
@@ -45,33 +50,38 @@ using VirtualList;
 public sealed class InventoryList : MonoBehaviour
 {
     [SerializeField] private VirtualListAdapterBase _view;
-    private readonly List<string> _items = new List<string> { "Potion", "Key" };
+    private readonly List<(string Title, int TemplateId)> _items = new List<(string, int)>
+    {
+        ("Potion", 0),
+        ("Key", 1)
+    };
 
     private void OnEnable()
     {
         IVirtualListAdapter adapter = _view;
-        adapter.RegisterCallbacks(BindItem, getEstimatedSize: EstimateItem);
+        adapter.RegisterCallbacks(BindItem);
+        adapter.RegisterItemTemplateCallback(index => _items[index].TemplateId);
         adapter.Init(_items.Count);
     }
 
     private void OnDisable() => _view.ClearCallbacks();
 
-    private Vector2 EstimateItem(int index) => new Vector2(160f, 48f);
-
     private void BindItem(VirtualItemCell holder, int index)
     {
-        holder.GetComponentInChildren<Text>().text = _items[index];
+        holder.GetComponentInChildren<Text>().text = _items[index].Title;
     }
 
-    public void Add(string title)
+    public void Add(string title, int templateId)
     {
-        _items.Add(title);
+        _items.Add((title, templateId));
         _view.RefreshItems(_items.Count);
     }
 }
 ```
 
 `RegisterCallbacks` 只有 `bindItem` 必填。回调在 `Init` 或下一次重建时生效，已绑定的实例用原回调回收。非活动适配器在启用时首次绑定条目。初始化后的数量变化用 `RefreshItems` 更新。
+
+`Default Item Size` 的 X 用于横向列表的宽度，Y 用于纵向列表、网格和树的高度。有效的条目估算可覆盖组件默认值，实测尺寸会更新布局缓存。代码可通过 `DefaultItemSize` 修改默认值，并调用 `RefreshItems()` 应用。
 
 `Init` 校验组件层级、滚动条、条目模板和布局参数。视口留空时使用适配器自身的 `RectTransform`，容器留空时创建 `Content`。每次建表都校验模板 ID，错误会报告对应的显示索引。整表刷新失败时会回收已绑定的条目，修正数据或回调后可再次调用 `RefreshItems`。
 
@@ -80,8 +90,8 @@ public sealed class InventoryList : MonoBehaviour
 | 回调 | 用途 |
 | --- | --- |
 | `bindItem(holder, index)` | 从业务集合按索引取数据，更新池化单元格的 UI 和交互 |
-| `getTemplateId(index)` | 选择模板，省略时使用 ID `0` |
-| `getEstimatedSize(index)` | 返回初始尺寸。主轴缺省或尺寸无效时用 `32` |
+| `RegisterItemTemplateCallback(index => ...)` | 按显示索引选择模板。优先于 `getTemplateId`。省略两种选择回调时使用 ID `0` |
+| `getEstimatedSize(index)` | 返回初始尺寸。省略回调或主轴尺寸无效时使用列表的 `Default Item Size` |
 | `measureItem(holder, index)` | 实测主轴尺寸，可用 `measureItem: (holder, index) => holder.GetPreferredSize()` 读取自动布局结果。固定尺寸场景可省略 |
 | `recycleItem(holder, index)` | 解绑业务监听、释放业务临时资源 |
 | `getDepth(index)` | 树模式中的缩进深度，省略时使用 `0` |
@@ -115,12 +125,37 @@ public sealed class InventoryList : MonoBehaviour
 
 ## 滚动与布局设置
 
-- `ScrollToIndex(index)` 根据 Inspector 的平滑滚动配置移动到该索引。动画期间如果实测尺寸改变了目标坐标，控制器会更新终点。
-- `SetScroll(origin)` 和 `AddScroll(delta)` 以 UGUI 布局单位控制偏移。纵向用 `y`，横向用 `x`，正值朝后续条目。
+- `ScrollToIndex(index)` 将指定条目的前沿对齐到视口起点，索引从 `0` 开始。循环列表选择最近一轮。若实测尺寸在动画期间改变了目标位置，控制器会更新终点。
+- `ScrollToPosition(position)` 跳到内容坐标，纵向取 `y`，横向取 `x`。有限列表将目标约束在滚动范围内，循环列表允许以当前轮起点为基准传入跨轮偏移。
+- 两个跳转接口默认使用 Inspector 的平滑滚动设置。可传入 `smooth` 覆盖本次调用。`SetScroll(origin)` 和 `AddScroll(delta)` 仍可用于即时设置偏移。
+- 传入 `precise: true` 时，先用估算或缓存尺寸即时定位，再随在屏测量修正。设置 `smooth: true` 会平滑过渡到修正后的位置。坐标跳转以指定的布局坐标为目标，有限列表会随滚动范围变化重新约束该坐标。未入屏的条目仍使用估算尺寸。
+- 索引跳转可传 `viewportIndex` 指定目标条目在视口内的位次，`0` 为第一项。空间不足、列表边界或网格整行布局限制时，优先保证目标可见。也可用 `ScrollIndexAlignment.Top` 或 `Bottom` 对齐到首尾边缘，横向对应左、右。
+- 传入 `duration` 和 `EaseCurve` 可设置单次跳转的动画，时长用非缩放秒数，传 `0` 即时定位。可传 `onComplete` 接收最终偏移。回调在定位和精确修正结束后执行一次，即时跳转也可能在方法返回前完成。新跳转、拖拽、直接设置偏移、重建或禁用列表会中断当前请求，且不会调用其完成回调。
 - `SetLoopScrolling(enabled)` 切换双向循环。较短的轮次可能同时显示同一索引的多个实例，绑定和回收按实例调用。
 - `CurrentSettings` 和 `ApplyScrollSettings(settings)` 可读写惯性、回弹、吸附和补间配置。
-- 手动组装时，将控制器放在带裁剪和射线目标的 `Viewport` 上，`Content` 作为其子节点。场景需要 Canvas、GraphicRaycaster 和 EventSystem。列表会将视口坐标换算到 `Content`，支持偏移、旋转和缩放。两者之间的复合变换不能产生斜切。
-- 向导生成的节点和示例条目继承所选父节点的 Layer。业务 Prefab 的 Layer 由 Prefab 自身决定。
+- 手动组装时，可把适配器挂到列表根节点，并引用带裁剪和射线目标的子节点 `Viewport`。将 `Content` 放在 `Viewport` 下。适配器也可直接挂在 `Viewport` 上，此时视口引用可留空。场景需要 Canvas、GraphicRaycaster 和 EventSystem。列表会将视口坐标换算到 `Content`，支持偏移、旋转和缩放。两者之间的复合变换不能产生斜切。
+- 右键创建的列表节点继承所选父节点的 Layer。业务条目 Prefab 使用自身的 Layer。
 - 条目根节点的位置、旋转、缩放和尺寸由列表设置。视觉变换和驱动尺寸的自动布局可放在条目内部。视口次轴尺寸变化时，列表会按新的尺寸重排并保留首个在屏条目的锚点，再按滚动范围约束。
 
+```csharp
+adapter.ScrollToIndex(5, smooth: false);
+adapter.RefreshItem(5);
+adapter.ScrollToPosition(new Vector2(0f, 240f), smooth: true);
+
+adapter.ScrollToIndex(20, smooth: true, precise: true, viewportIndex: 2);
+adapter.ScrollToIndex(20, ScrollIndexAlignment.Bottom, precise: true);
+adapter.ScrollToPosition(new Vector2(0f, 600f), smooth: true, precise: true);
+
+adapter.ScrollToIndex(20, 0.35f, EaseCurve.EaseOutCubic,
+    position => Debug.Log(position), precise: true, viewportIndex: 2);
+adapter.ScrollToIndex(20, ScrollIndexAlignment.Bottom, 0.4f, EaseCurve.EaseOutQuart,
+    position => Debug.Log(position), precise: true);
+adapter.ScrollToPosition(new Vector2(0f, 600f), 0.5f, EaseCurve.Linear,
+    position => Debug.Log(position));
+```
+
 从旧版迁移时，按布局将场景或 Prefab 上的 `VirtualScrollView` 换成对应适配器，并重新绑定视口、容器、滚动条和模板。原 `RegisterCallbacks(count, callbacks)` 拆成直接注册委托和 `Init(count)` 两步。业务排序或树展开后继续用 `RefreshItems` 通知视图。
+
+## 许可证
+
+Dynamic Virtual List 采用 [MIT 许可证](LICENSE.md)。

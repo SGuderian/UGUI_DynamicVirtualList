@@ -90,6 +90,8 @@ namespace VirtualList
 
         private void ValidateLayoutConfiguration(LayoutOptions options)
         {
+            if (!IsValidItemSize(options.DefaultItemSize))
+                throw ConfigurationError($"Default Item Size dimensions must be finite and positive. Current value: {options.DefaultItemSize}.");
             if (options.Spacing < 0f || float.IsNaN(options.Spacing) || float.IsInfinity(options.Spacing))
                 throw ConfigurationError($"Spacing must be a finite, non-negative number. Current value: {options.Spacing}.");
             if (_measureDelayFrames < 0)
@@ -100,6 +102,9 @@ namespace VirtualList
                 (options.IndentPerDepth < 0f || float.IsNaN(options.IndentPerDepth) || float.IsInfinity(options.IndentPerDepth)))
                 throw ConfigurationError($"Tree Indent Per Depth must be a finite, non-negative number. Current value: {options.IndentPerDepth}.");
         }
+
+        private static bool IsValidItemSize(Vector2 size)
+            => SizePrefixCache.IsValidLength(size.x) && SizePrefixCache.IsValidLength(size.y);
 
         private int ResolveTemplateId(int index)
         {

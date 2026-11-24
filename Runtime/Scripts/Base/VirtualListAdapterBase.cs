@@ -19,6 +19,8 @@ namespace VirtualList
         [SerializeField] private List<VirtualItemTemplate> _itemTemplates = new List<VirtualItemTemplate>();
 
         [Header("Layout")]
+        [Tooltip("条目缺少有效估算时使用的尺寸。纵向读取 Y，横向读取 X。")]
+        [SerializeField] private Vector2 _defaultItemSize = Vector2.one * SizePrefixCache.DefaultLength;
         [SerializeField, Min(0f)] private float _spacing = 4f;
         [SerializeField] private RectOffset _padding;
         [Tooltip("首尾连接，允许双向循环滑动。")]
@@ -44,6 +46,7 @@ namespace VirtualList
         private Dictionary<int, GameObject> _configuredPrefabs;
         private Func<int, int> _resolveTemplateId;
         private AdapterCallbacks _registeredCallbacks;
+        private Func<int, int> _itemTemplateSelector;
         private AdapterCallbacks _callbacks;
         private int _itemCount;
         private ScrollMotion _motion;
@@ -86,8 +89,15 @@ namespace VirtualList
         private bool _siblingsOrdered;
         private VirtualLayoutMode _builtMode;
         private int _targetIndex = -1;
+        private float _targetOffset;
         private long _targetCycle;
         private SnapAlign? _targetAlignment;
+        private ScrollIndexAlignment _indexAlignment;
+        private int _targetViewportIndex = -1;
+        private bool _preciseJump;
+        private bool _smoothCorrection;
+        private (float Duration, EaseCurve Curve)? _jumpAnimation;
+        private Action<Vector2> _onJumpCompleted;
 
         private float _lastDragTime;
         private Vector2 _lastDragPosition;
@@ -111,12 +121,14 @@ namespace VirtualList
             public Func<int, int> GetDepth;
         }
 
+        private Func<int, int> RegisteredTemplateSelector => _itemTemplateSelector ?? _registeredCallbacks.GetTemplateId;
+
         private void PrepareAdapter(int itemCount)
         {
             var viewport = ValidateViewportAndContent();
             var prefabs = BuildValidatedPrefabMap(viewport);
             ValidateLayoutConfiguration(BuildLayoutOptions());
-            if (itemCount > 0 && _registeredCallbacks.GetTemplateId == null)
+            if (itemCount > 0 && RegisteredTemplateSelector == null)
                 ValidateTemplateId(prefabs, 0, 0);
             if (_pool == null) BuildLayout();
 
@@ -170,6 +182,7 @@ namespace VirtualList
 
         private void StopProcessing()
         {
+            CancelJump();
             if (!_processing) return;
             _processing = false;
             if (_verticalScrollbar != null) _verticalScrollbar.onValueChanged.RemoveListener(OnVerticalScrollbarChanged);
@@ -185,6 +198,7 @@ namespace VirtualList
         protected virtual void OnDestroy()
         {
             IsInitialized = false;
+            CancelJump();
             if (_pool == null) return;
             _updatingView = true;
             try
@@ -195,6 +209,7 @@ namespace VirtualList
             {
                 _pool.Clear();
                 _registeredCallbacks = _callbacks = default;
+                _itemTemplateSelector = null;
                 ClearInteractionCallbacks();
             }
         }
@@ -218,6 +233,7 @@ namespace VirtualList
             options.Mode = LayoutMode;
             options.Spacing = _spacing;
             options.Padding = _padding;
+            options.DefaultItemSize = _defaultItemSize;
             ConfigureLayout(ref options);
             return options;
         }
@@ -225,6 +241,18 @@ namespace VirtualList
         public int ItemCount => _itemCount;
         public bool IsInitialized { get; private set; }
         public abstract VirtualLayoutMode LayoutMode { get; }
+
+        /// <inheritdoc/>
+        public Vector2 DefaultItemSize
+        {
+            get => _defaultItemSize;
+            set
+            {
+                if (!IsValidItemSize(value))
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "Default item dimensions must be finite and positive.");
+                _defaultItemSize = value;
+            }
+        }
 
         /// <inheritdoc/>
         public void RegisterCallbacks(Action<VirtualItemCell, int> bindItem,
@@ -242,6 +270,9 @@ namespace VirtualList
                 GetDepth = getDepth
             };
         }
+
+        /// <inheritdoc/>
+        public void RegisterItemTemplateCallback(Func<int, int> callback) => _itemTemplateSelector = callback;
 
         /// <inheritdoc/>
         public void Init(int itemCount = 0)
@@ -277,6 +308,7 @@ namespace VirtualList
         {
             IsInitialized = false;
             _registeredCallbacks = default;
+            _itemTemplateSelector = null;
             _itemCount = 0;
             _anchorIndex = -1;
             StopProcessing();
@@ -318,6 +350,7 @@ namespace VirtualList
 
         private void Rebind(bool synchronizeViewport)
         {
+            CancelJump();
             _dirtyLayout = true;
             _layoutFaulted = false;
             if (_pool == null || _updatingView || (!isActiveAndEnabled && IsInitialized)) return;
@@ -369,6 +402,7 @@ namespace VirtualList
             _invalidTemplates.Clear();
             if (_builtMode != LayoutMode) BuildLayout();
             _callbacks = IsInitialized ? _registeredCallbacks : default;
+            if (IsInitialized) _callbacks.GetTemplateId = RegisteredTemplateSelector;
             int anchorIndex = _anchorIndex;
             float anchorOffset = _anchorOffset;
             _anchorIndex = -1;
@@ -441,20 +475,114 @@ namespace VirtualList
         }
 
         /// <inheritdoc/>
-        public void ScrollToIndex(int visibleIndex)
+        public void ScrollToIndex(int visibleIndex) => ScrollToIndex(visibleIndex, _scrollSettings.SmoothScroll);
+
+        /// <inheritdoc/>
+        public void ScrollToIndex(int visibleIndex, bool smooth)
+            => ScrollToIndex(visibleIndex, smooth, precise: false);
+
+        /// <inheritdoc/>
+        public void ScrollToIndex(int visibleIndex, bool smooth, bool precise, int viewportIndex = -1)
+            => JumpToIndex(visibleIndex, ScrollIndexAlignment.Top, smooth, precise, viewportIndex);
+
+        /// <inheritdoc/>
+        public void ScrollToIndex(int visibleIndex, float duration, EaseCurve curve, Action<Vector2> onComplete = null,
+            bool precise = false, int viewportIndex = -1)
+            => JumpToIndex(visibleIndex, ScrollIndexAlignment.Top, duration > 0f, precise, viewportIndex,
+                ValidateJumpAnimation(duration, curve), onComplete);
+
+        /// <inheritdoc/>
+        public void ScrollToIndex(int visibleIndex, ScrollIndexAlignment alignment, bool precise = false)
+            => ScrollToIndex(visibleIndex, alignment, _scrollSettings.SmoothScroll, precise);
+
+        /// <inheritdoc/>
+        public void ScrollToIndex(int visibleIndex, ScrollIndexAlignment alignment, bool smooth, bool precise)
+            => JumpToIndex(visibleIndex, alignment, smooth, precise, viewportIndex: -1);
+
+        /// <inheritdoc/>
+        public void ScrollToIndex(int visibleIndex, ScrollIndexAlignment alignment, float duration, EaseCurve curve,
+            Action<Vector2> onComplete = null, bool precise = false)
+            => JumpToIndex(visibleIndex, alignment, duration > 0f, precise, viewportIndex: -1,
+                ValidateJumpAnimation(duration, curve), onComplete);
+
+        private void JumpToIndex(int visibleIndex, ScrollIndexAlignment alignment, bool smooth, bool precise, int viewportIndex,
+            (float Duration, EaseCurve Curve)? animation = null, Action<Vector2> onComplete = null)
         {
-            if (_dirtyLayout || _callbacks.BindItem == null || _layout == null || visibleIndex < 0 || visibleIndex >= _layout.Count) return;
-            float offset = _layout.GetScrollOffsetForIndex(visibleIndex);
-            float turns = _loopLength > 0f ? Mathf.Round((Axis(_scrollOrigin) - offset) / _loopLength) : 0f;
+            if (!CanJump || visibleIndex < 0 || visibleIndex >= _layout.Count) return;
+            if (viewportIndex < -1) throw new ArgumentOutOfRangeException(nameof(viewportIndex));
+            if (alignment != ScrollIndexAlignment.Top && alignment != ScrollIndexAlignment.Bottom)
+                throw new ArgumentOutOfRangeException(nameof(alignment));
+
             _targetIndex = visibleIndex;
-            _targetCycle = _loopCycle + (long)turns;
             _targetAlignment = null;
-            offset += turns * _loopLength;
+            _indexAlignment = alignment;
+            _targetViewportIndex = viewportIndex;
+            float offset = GetIndexTargetOffset(_loopLength);
+            float turns = _loopLength > 0f ? Mathf.Round((Axis(_scrollOrigin) - offset) / _loopLength) : 0f;
+            _targetCycle = _loopCycle + (long)turns;
+            BeginJump(offset + turns * _loopLength, smooth, precise, animation, onComplete);
+        }
+
+        /// <inheritdoc/>
+        public void ScrollToPosition(Vector2 position) => ScrollToPosition(position, _scrollSettings.SmoothScroll);
+
+        /// <inheritdoc/>
+        public void ScrollToPosition(Vector2 position, bool smooth) => ScrollToPosition(position, smooth, precise: false);
+
+        /// <inheritdoc/>
+        public void ScrollToPosition(Vector2 position, bool smooth, bool precise)
+            => JumpToPosition(position, smooth, precise);
+
+        /// <inheritdoc/>
+        public void ScrollToPosition(Vector2 position, float duration, EaseCurve curve, Action<Vector2> onComplete = null,
+            bool precise = false)
+            => JumpToPosition(position, duration > 0f, precise, ValidateJumpAnimation(duration, curve), onComplete);
+
+        private void JumpToPosition(Vector2 position, bool smooth, bool precise,
+            (float Duration, EaseCurve Curve)? animation = null, Action<Vector2> onComplete = null)
+        {
+            if (!CanJump) return;
+            _targetIndex = -1;
+            _targetCycle = _loopCycle;
+            _targetOffset = FiniteOrZero(Axis(position));
+            _targetAlignment = null;
+            BeginJump(_targetOffset, smooth, precise, animation, onComplete);
+        }
+
+        private bool CanJump => !_dirtyLayout && _callbacks.BindItem != null && _layout != null && _layout.Count > 0;
+
+        private static (float Duration, EaseCurve Curve) ValidateJumpAnimation(float duration, EaseCurve curve)
+        {
+            if (duration < 0f || float.IsNaN(duration) || float.IsInfinity(duration))
+                throw new ArgumentOutOfRangeException(nameof(duration), "Jump duration must be finite and non-negative.");
+            return (duration, curve);
+        }
+
+        private void BeginJump(float offset, bool smooth, bool precise, (float Duration, EaseCurve Curve)? animation,
+            Action<Vector2> onComplete)
+        {
+            _preciseJump = precise;
+            _smoothCorrection = smooth;
+            _jumpAnimation = animation;
+            _onJumpCompleted = onComplete;
             _motion.Bind(_scrollOrigin, _layout.ContentSize, _viewportSize, _layout.IsVertical);
-            _motion.ScrollTo(offset, _scrollSettings.SmoothScroll,
-                _scrollSettings.SmoothDuration, _scrollSettings.SmoothCurve);
+            // 先让目标区域入屏，才能用实测尺寸修正跳转位置。
+            ScrollWithJumpAnimation(offset, smooth && !precise);
             _scrollOrigin = _motion.Origin;
             Relayout(notifyScroll: true);
+        }
+
+        private void ScrollWithJumpAnimation(float offset, bool smooth)
+        {
+            var (duration, curve) = _jumpAnimation ?? (_scrollSettings.SmoothDuration, _scrollSettings.SmoothCurve);
+            _motion.ScrollTo(offset, smooth, duration, curve);
+        }
+
+        private void CancelJump()
+        {
+            _preciseJump = false;
+            _jumpAnimation = null;
+            _onJumpCompleted = null;
         }
 
         public void OnBeginDrag(PointerEventData eventData)
@@ -463,6 +591,7 @@ namespace VirtualList
                 || eventData.button != PointerEventData.InputButton.Left
                 || !RectTransformUtility.ScreenPointToLocalPointInRectangle(_viewport, eventData.position,
                     eventData.pressEventCamera, out _lastDragPosition)) return;
+            CancelJump();
             _motion.Bind(_scrollOrigin, _layout.ContentSize, _viewportSize, _layout.IsVertical);
             _motion.BeginDrag();
             _dragPointerId = eventData.pointerId;
@@ -540,7 +669,7 @@ namespace VirtualList
                 forceLayout = true;
             }
             if (forceLayout || (!_motion.IsAnimating && _active.Count > 0 && UpdatePlacement(out bool moved) && moved))
-                Relayout();
+                Relayout(notifyScroll: _preciseJump);
         }
 
         private float ResolveAndTrackSnap(float offset, SnapAlign align, out int index)
@@ -902,7 +1031,7 @@ namespace VirtualList
             {
                 _updatingView = false;
             }
-            if (!_dirtyLayout && !_pendingRelayout) PublishScroll(false);
+            if (!_dirtyLayout && !_pendingRelayout) PublishScroll(_preciseJump);
         }
 
         private bool MeasureVisible(bool prepareLayout)
@@ -954,7 +1083,7 @@ namespace VirtualList
         private void AdjustAfterResize(VirtualItemData anchor, float anchorOffset)
         {
             // 前缀尺寸或循环长度变化时，保持首个在屏条目的视口内位置。
-            if (anchor != null && !_motion.IsAnimating)
+            if (!_preciseJump && anchor != null && !_motion.IsAnimating)
             {
                 float change = _layout.GetScrollOffsetForIndex(anchor.Index) - anchorOffset;
                 float newLoopLength = GetLoopLength();
@@ -969,15 +1098,41 @@ namespace VirtualList
 
         private void RetargetAnimation()
         {
-            if (_motion.State != MotionState.Tween || _targetIndex < 0 || _targetIndex >= _layout.Count) return;
-
-            float target = _targetAlignment.HasValue
-                ? SnapOffset(_targetIndex, _targetAlignment.Value) : _layout.GetScrollOffsetForIndex(_targetIndex);
+            bool tweening = _motion.State == MotionState.Tween;
+            if ((!tweening && !_preciseJump) || _targetIndex >= _layout.Count) return;
             float length = GetLoopLength();
+            float target = _targetIndex >= 0 ? GetIndexTargetOffset(length) : _targetOffset;
             target += (_targetCycle - _loopCycle) * length;
             _motion.Looping = length > 0f;
             _motion.Bind(_scrollOrigin, _layout.ContentSize, _viewportSize, _layout.IsVertical);
-            _motion.RetargetTween(target);
+            if (tweening)
+                _motion.RetargetTween(target);
+            else
+                ScrollWithJumpAnimation(target, _smoothCorrection);
+            _scrollOrigin = _motion.Origin;
+        }
+
+        private float GetIndexTargetOffset(float loopLength)
+        {
+            if (_targetAlignment.HasValue) return SnapOffset(_targetIndex, _targetAlignment.Value);
+
+            float start = _layout.GetScrollOffsetForIndex(_targetIndex);
+            if (_indexAlignment == ScrollIndexAlignment.Top && _targetViewportIndex <= 0) return start;
+
+            Rect rect = _layout.GetRect(_targetIndex);
+            float endAligned = Axis(rect.position + rect.size) - Axis(_viewportSize);
+            if (_indexAlignment == ScrollIndexAlignment.Bottom) return endAligned;
+
+            int firstIndex = _targetIndex - _targetViewportIndex;
+            float precedingCycles = 0f;
+            if (firstIndex < 0 && loopLength > 0f)
+            {
+                int turns = (int)Math.Floor((double)firstIndex / _layout.Count);
+                firstIndex = (int)(firstIndex - (long)turns * _layout.Count);
+                precedingCycles = turns * loopLength;
+            }
+            float slotOffset = _layout.GetScrollOffsetForIndex(Math.Max(0, firstIndex)) + precedingCycles;
+            return Mathf.Max(slotOffset, Mathf.Min(start, endAligned));
         }
 
         private void Release((long Cycle, int Index) key)
@@ -1049,6 +1204,7 @@ namespace VirtualList
                         RecycleAll();
                         _loopCycle = 0;
                         _motion.CancelMotion();
+                        CancelJump();
                     }
                     else _loopCycle += (long)turns;
                     _motion.ShiftOrigin(normalized - offset);
@@ -1107,6 +1263,7 @@ namespace VirtualList
         /// <inheritdoc/>
         public void SetScroll(Vector2 origin)
         {
+            CancelJump();
             _motion?.CancelMotion();
             _scrollOrigin = new Vector2(FiniteOrZero(origin.x), FiniteOrZero(origin.y));
             Relayout(notifyScroll: true);

@@ -41,12 +41,13 @@ namespace VirtualList
             }
 
             float crossSize = CrossSize;
+            float defaultLength = _vertical ? options.DefaultItemSize.y : options.DefaultItemSize.x;
             for (int i = 0; i < n; i++)
             {
                 var estimate = (estimateSize?.Invoke(i) ?? Vector2.zero);
                 _sizes[i] = _vertical
-                    ? new Vector2(crossSize, SizePrefixCache.Estimate(estimate.y))
-                    : new Vector2(SizePrefixCache.Estimate(estimate.x), crossSize);
+                    ? new Vector2(crossSize, SizePrefixCache.Estimate(estimate.y, defaultLength))
+                    : new Vector2(SizePrefixCache.Estimate(estimate.x, defaultLength), crossSize);
                 _templateIds[i] = templateId?.Invoke(i) ?? 0;
             }
 

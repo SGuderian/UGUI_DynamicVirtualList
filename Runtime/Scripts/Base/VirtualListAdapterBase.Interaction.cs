@@ -108,7 +108,7 @@ namespace VirtualList
                     _updatingView = false;
                 }
 
-                if (!_dirtyLayout && !_pendingRelayout) PublishScroll(false);
+                if (!_dirtyLayout && !_pendingRelayout) PublishScroll(_preciseJump);
                 foreach (int index in _refreshingItems)
                 {
                     if (_dirtyLayout || !IsInitialized) break;
@@ -147,7 +147,7 @@ namespace VirtualList
                 {
                     if (index < _measuredItems.Length) _measuredItems[index] = false;
                     if (estimate == null) continue;
-                    float size = SizePrefixCache.Estimate(Axis(estimate(index)));
+                    float size = SizePrefixCache.Estimate(Axis(estimate(index)), Axis(_layoutOptions.DefaultItemSize));
                     if (_dirtyLayout) break;
                     resized |= _layout.ResizeItem(index, AlongAxis(size));
                 }
@@ -164,7 +164,10 @@ namespace VirtualList
         {
             Vector2 previous = _reportedScrollPosition;
             bool changed = reportMovement && (!previous.Equals(_scrollOrigin) || _reportedLoopCycle != _loopCycle);
-            bool moving = IsInitialized && _processing && !_dirtyLayout && _motion.State != MotionState.Idle;
+            bool ready = IsInitialized && _processing && !_dirtyLayout;
+            if (_preciseJump && ready && !_pendingRelayout && _motion.State == MotionState.Idle && _pendingMeasure.Count == 0)
+                _preciseJump = false;
+            bool moving = ready && (_preciseJump || _motion.State != MotionState.Idle);
             _reportedScrollPosition = _scrollOrigin;
             _reportedLoopCycle = _loopCycle;
 
@@ -178,6 +181,11 @@ namespace VirtualList
             {
                 _scrollActive = false;
                 QueueScrollCallback(_onScrollEnded, _scrollOrigin);
+            }
+            if (_onJumpCompleted != null && ready && !moving && !_pendingRelayout)
+            {
+                QueueScrollCallback(_onJumpCompleted, _scrollOrigin);
+                _onJumpCompleted = null;
             }
 
             if (dispatch) DispatchScrollCallbacks();

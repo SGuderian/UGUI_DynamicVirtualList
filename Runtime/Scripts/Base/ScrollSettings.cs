@@ -2,6 +2,14 @@ using UnityEngine;
 
 namespace VirtualList
 {
+    public enum ScrollIndexAlignment
+    {
+        /// <summary>对齐视口顶部，横向列表对齐左侧。</summary>
+        Top,
+        /// <summary>对齐视口底部，横向列表对齐右侧。</summary>
+        Bottom,
+    }
+
     public enum SnapAlign
     {
         /// <summary>条目前沿对齐视口起点。横向时对齐左侧。</summary>
@@ -63,7 +71,7 @@ namespace VirtualList
         public float SnapVelocityThreshold;
 
         [Header("Tween 平滑滚动")]
-        [Tooltip("ScrollToIndex 是否用补间动画（false 为瞬间跳转）。")]
+        [Tooltip("索引和坐标跳转默认是否使用补间动画。可在调用时覆盖。")]
         public bool SmoothScroll;
         public float SmoothDuration;
         public EaseCurve SmoothCurve;
